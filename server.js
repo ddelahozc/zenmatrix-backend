@@ -18,6 +18,58 @@ app.get('/', (req, res) => {
     res.send('¡La API de ZenMatrix está funcionando! 🎉');
 });
 
+// Ruta para crear una nueva tarea
+app.post('/api/tasks', async (req, res) => {
+    try {
+        // Extraer los datos de la tarea del cuerpo de la petición (req.body)
+        // Asegúrate de que los nombres de los campos coincidan con tu schema.prisma
+        const { proyecto, responsable, titulo, descripcion, fechaVencimiento, prioridad } = req.body;
+
+        // Validaciones básicas (puedes añadir más robustas después)
+        if (!titulo || !proyecto || !responsable || !prioridad) {
+            return res.status(400).json({ error: 'Faltan campos obligatorios: titulo, proyecto, responsable, prioridad.' });
+        }
+
+        // Convertir fechaVencimiento a Date si existe
+        const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
+
+        // Crear la tarea en la base de datos usando Prisma
+        const newTask = await prisma.task.create({
+            data: {
+                proyecto,
+                responsable,
+                titulo,
+                descripcion,
+                fechaVencimiento: parsedFechaVencimiento,
+                prioridad,
+                // isCompleted y fechaInicio tienen valores por defecto en el schema
+            },
+        });
+
+        // Enviar la nueva tarea creada como respuesta con estado 201 (Creado)
+        res.status(201).json(newTask);
+
+    } catch (error) {
+        console.error('Error al crear la tarea:', error);
+        res.status(500).json({ error: 'No se pudo crear la tarea.', details: error.message });
+    }
+});
+
+// Ruta para obtener todas las tareas
+app.get('/api/tasks', async (req, res) => {
+    try {
+        // Obtener todas las tareas de la base de datos usando Prisma
+        const tasks = await prisma.task.findMany();
+
+        // Enviar las tareas como respuesta
+        res.status(200).json(tasks);
+
+    } catch (error) {
+        console.error('Error al obtener las tareas:', error);
+        res.status(500).json({ error: 'No se pudieron obtener las tareas.', details: error.message });
+    }
+});
+
 // --- Fin de Rutas de la API ---
 
 
