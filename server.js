@@ -70,6 +70,72 @@ app.get('/api/tasks', async (req, res) => {
     }
 });
 
+// Ruta para actualizar una tarea por su ID
+app.put('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params; // Obtener el ID de los parámetros de la URL
+        // Extraer los datos actualizados del cuerpo de la petición
+        const { proyecto, responsable, titulo, descripcion, fechaVencimiento, fechaTerminada, prioridad, isCompleted } = req.body;
+
+        // Convertir fechas a Date si existen
+        const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
+        const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : undefined;
+
+        // Actualizar la tarea en la base de datos usando Prisma
+        const updatedTask = await prisma.task.update({
+            where: {
+                id: parseInt(id), // Convertir el ID de string a número entero
+            },
+            data: {
+                proyecto,
+                responsable,
+                titulo,
+                descripcion,
+                fechaVencimiento: parsedFechaVencimiento,
+                fechaTerminada: parsedFechaTerminada,
+                prioridad,
+                isCompleted,
+            },
+        });
+
+        if (!updatedTask) {
+            return res.status(404).json({ error: 'Tarea no encontrada.' });
+        }
+
+        // Enviar la tarea actualizada como respuesta
+        res.status(200).json(updatedTask);
+
+    } catch (error) {
+        console.error('Error al actualizar la tarea:', error);
+        res.status(500).json({ error: 'No se pudo actualizar la tarea.', details: error.message });
+    }
+});
+
+// Ruta para eliminar una tarea por su ID
+app.delete('/api/tasks/:id', async (req, res) => {
+    try {
+        const { id } = req.params; // Obtener el ID de los parámetros de la URL
+
+        // Eliminar la tarea de la base de datos usando Prisma
+        const deletedTask = await prisma.task.delete({
+            where: {
+                id: parseInt(id), // Convertir el ID de string a número entero
+            },
+        });
+
+        if (!deletedTask) {
+            return res.status(404).json({ error: 'Tarea no encontrada.' });
+        }
+
+        // Enviar un mensaje de éxito (204 No Content es común para DELETE exitoso)
+        res.status(204).send(); // No se envía contenido en el cuerpo, solo el estado
+
+    } catch (error) {
+        console.error('Error al eliminar la tarea:', error);
+        res.status(500).json({ error: 'No se pudo eliminar la tarea.', details: error.message });
+    }
+});
+
 // --- Fin de Rutas de la API ---
 
 
