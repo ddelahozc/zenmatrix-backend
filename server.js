@@ -5,7 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const app = express();
 const prisma = new PrismaClient();
-const PORT = process.env.env || 5000; // Corregido: PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5000; // Asegurarse que se use process.env.PORT
 
 // Middlewares
 app.use(cors());
@@ -46,19 +46,19 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS Y BÚSQUEDA ---
+// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS, BÚSQUEDA Y ORDENAMIENTO ---
 app.get('/api/tasks', async (req, res) => {
     try {
-        // Obtener parámetros de consulta de la URL
-        const { search, priority, isCompleted, proyecto } = req.query;
+        // Obtener parámetros de consulta de la URL (filtros y ordenamiento)
+        const { search, priority, isCompleted, proyecto, sortBy, sortDirection } = req.query;
 
-        // Construir el objeto 'where' para Prisma dinámicamente
+        // Construir el objeto 'where' para Prisma dinámicamente (filtros)
         const whereClause = {};
 
         // Filtro por término de búsqueda (título o descripción)
         if (search) {
             whereClause.OR = [
-                // Eliminado: mode: 'insensitive' - NO SOPORTADO EN MYSQL CON CONTAINS
+                // 'mode' no es compatible con MySQL, se asume que la base de datos es insensible a mayúsculas/minúsculas
                 { titulo: { contains: search } },
                 { descripcion: { contains: search } },
             ];
@@ -74,24 +74,32 @@ app.get('/api/tasks', async (req, res) => {
             whereClause.isCompleted = isCompleted === 'true'; // Convertir string 'true'/'false' a booleano
         }
 
-        // Nuevo: Filtro por proyecto
+        // Filtro por proyecto
         if (proyecto) {
-            // Eliminado: mode: 'insensitive' - NO SOPORTADO EN MYSQL CON CONTAINS
             whereClause.proyecto = { contains: proyecto };
         }
 
-        // Obtener tareas de la base de datos usando Prisma con el filtro aplicado
+        // Construir el objeto 'orderBy' para Prisma dinámicamente (ordenamiento)
+        let orderByClause = {};
+        if (sortBy && sortDirection) {
+            orderByClause = {
+                [sortBy]: sortDirection, // Ej: { createdAt: 'desc' }
+            };
+        } else {
+            // Ordenamiento por defecto si no se especifica
+            orderByClause = { createdAt: 'desc' };
+        }
+
+        // Obtener tareas de la base de datos usando Prisma con el filtro y ordenamiento aplicados
         const tasks = await prisma.task.findMany({
             where: whereClause,
-            orderBy: {
-                createdAt: 'desc', // Opcional: ordenar por fecha de creación descendente
-            },
+            orderBy: orderByClause, // Aplicar la cláusula de ordenamiento
         });
 
         res.status(200).json(tasks);
 
     } catch (error) {
-        console.error('Error al obtener las tareas con filtros:', error);
+        console.error('Error al obtener las tareas con filtros y ordenamiento:', error);
         res.status(500).json({ error: 'No se pudieron obtener las tareas.', details: error.message });
     }
 });
