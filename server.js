@@ -5,7 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 
 const app = express();
 const prisma = new PrismaClient();
-const PORT = process.env.PORT || 5000; // Asegurarse que se use process.env.PORT
+const PORT = process.env.PORT || 5000;
 
 // Middlewares
 app.use(cors());
@@ -46,11 +46,11 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS, BÚSQUEDA Y ORDENAMIENTO ---
+// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS, BÚSQUEDA, ORDENAMIENTO Y PAGINACIÓN ---
 app.get('/api/tasks', async (req, res) => {
     try {
-        // Obtener parámetros de consulta de la URL (filtros y ordenamiento)
-        const { search, priority, isCompleted, proyecto, sortBy, sortDirection } = req.query;
+        // Obtener parámetros de consulta de la URL (filtros, ordenamiento y paginación)
+        const { search, priority, isCompleted, proyecto, sortBy, sortDirection, page, limit } = req.query;
 
         // Construir el objeto 'where' para Prisma dinámicamente (filtros)
         const whereClause = {};
@@ -58,7 +58,6 @@ app.get('/api/tasks', async (req, res) => {
         // Filtro por término de búsqueda (título o descripción)
         if (search) {
             whereClause.OR = [
-                // 'mode' no es compatible con MySQL, se asume que la base de datos es insensible a mayúsculas/minúsculas
                 { titulo: { contains: search } },
                 { descripcion: { contains: search } },
             ];
@@ -90,16 +89,33 @@ app.get('/api/tasks', async (req, res) => {
             orderByClause = { createdAt: 'desc' };
         }
 
-        // Obtener tareas de la base de datos usando Prisma con el filtro y ordenamiento aplicados
+        // --- Lógica de Paginación ---
+        const pageNum = parseInt(page) || 1; // Página actual, por defecto 1
+        const limitNum = parseInt(limit) || 10; // Límite de tareas por página, por defecto 10
+        const skip = (pageNum - 1) * limitNum; // Calcular cuántas tareas saltar
+
+        // Obtener el conteo total de tareas que coinciden con los filtros (sin paginación)
+        const totalCount = await prisma.task.count({ where: whereClause });
+
+        // Obtener tareas paginadas de la base de datos usando Prisma
         const tasks = await prisma.task.findMany({
             where: whereClause,
-            orderBy: orderByClause, // Aplicar la cláusula de ordenamiento
+            orderBy: orderByClause,
+            skip: skip,
+            take: limitNum,
         });
 
-        res.status(200).json(tasks);
+        // Devolver las tareas paginadas y el conteo total
+        res.status(200).json({
+            tasks,
+            totalCount,
+            currentPage: pageNum,
+            limit: limitNum,
+            totalPages: Math.ceil(totalCount / limitNum),
+        });
 
     } catch (error) {
-        console.error('Error al obtener las tareas con filtros y ordenamiento:', error);
+        console.error('Error al obtener las tareas con filtros, ordenamiento y paginación:', error);
         res.status(500).json({ error: 'No se pudieron obtener las tareas.', details: error.message });
     }
 });
@@ -112,9 +128,7 @@ app.put('/api/tasks/:id', async (req, res) => {
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, fechaTerminada, prioridad, isCompleted } = req.body;
 
         const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
-        // Solo parsear fechaTerminada si no es null
         const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : null;
-
 
         const updatedTask = await prisma.task.update({
             where: {
