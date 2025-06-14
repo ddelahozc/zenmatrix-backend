@@ -1,19 +1,17 @@
-require('dotenv').config(); // Cargar variables de entorno desde .env
+require('dotenv').config();
 const express = require('express');
-const cors = require('cors'); // Para permitir peticiones desde el frontend de React
-const { PrismaClient } = require('@prisma/client'); // Importar el cliente de Prisma
+const cors = require('cors');
+const { PrismaClient } = require('@prisma/client');
 
 const app = express();
-const prisma = new PrismaClient(); // Instanciar Prisma
-const PORT = process.env.PORT || 5000; // Puerto donde correrá el servidor
+const prisma = new PrismaClient();
+const PORT = process.env.env || 5000; // Corregido: PORT = process.env.PORT || 5000;
 
-// Middlewares: Son funciones que se ejecutan antes de que la solicitud llegue a las rutas
-app.use(cors()); // Habilitar CORS para permitir que tu frontend de React se conecte
-app.use(express.json()); // Habilitar el parseo de JSON en las peticiones (para que podamos recibir datos JSON)
+// Middlewares
+app.use(cors());
+app.use(express.json());
 
-// --- Rutas de la API ---
-
-// Ruta de prueba inicial: Para verificar que el servidor está funcionando
+// Ruta de prueba inicial
 app.get('/', (req, res) => {
     res.send('¡La API de ZenMatrix está funcionando! 🎉');
 });
@@ -21,19 +19,14 @@ app.get('/', (req, res) => {
 // Ruta para crear una nueva tarea
 app.post('/api/tasks', async (req, res) => {
     try {
-        // Extraer los datos de la tarea del cuerpo de la petición (req.body)
-        // Asegúrate de que los nombres de los campos coincidan con tu schema.prisma
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, prioridad } = req.body;
 
-        // Validaciones básicas (puedes añadir más robustas después)
         if (!titulo || !proyecto || !responsable || !prioridad) {
             return res.status(400).json({ error: 'Faltan campos obligatorios: titulo, proyecto, responsable, prioridad.' });
         }
 
-        // Convertir fechaVencimiento a Date si existe
         const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
 
-        // Crear la tarea en la base de datos usando Prisma
         const newTask = await prisma.task.create({
             data: {
                 proyecto,
@@ -42,11 +35,9 @@ app.post('/api/tasks', async (req, res) => {
                 descripcion,
                 fechaVencimiento: parsedFechaVencimiento,
                 prioridad,
-                // isCompleted y fechaInicio tienen valores por defecto en el schema
             },
         });
 
-        // Enviar la nueva tarea creada como respuesta con estado 201 (Creado)
         res.status(201).json(newTask);
 
     } catch (error) {
@@ -55,36 +46,71 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// Ruta para obtener todas las tareas
+// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS Y BÚSQUEDA ---
 app.get('/api/tasks', async (req, res) => {
     try {
-        // Obtener todas las tareas de la base de datos usando Prisma
-        const tasks = await prisma.task.findMany();
+        // Obtener parámetros de consulta de la URL
+        const { search, priority, isCompleted, proyecto } = req.query;
 
-        // Enviar las tareas como respuesta
+        // Construir el objeto 'where' para Prisma dinámicamente
+        const whereClause = {};
+
+        // Filtro por término de búsqueda (título o descripción)
+        if (search) {
+            whereClause.OR = [
+                // Eliminado: mode: 'insensitive' - NO SOPORTADO EN MYSQL CON CONTAINS
+                { titulo: { contains: search } },
+                { descripcion: { contains: search } },
+            ];
+        }
+
+        // Filtro por prioridad
+        if (priority) {
+            whereClause.prioridad = priority;
+        }
+
+        // Filtro por estado de completado
+        if (isCompleted !== undefined && isCompleted !== null && isCompleted !== '') {
+            whereClause.isCompleted = isCompleted === 'true'; // Convertir string 'true'/'false' a booleano
+        }
+
+        // Nuevo: Filtro por proyecto
+        if (proyecto) {
+            // Eliminado: mode: 'insensitive' - NO SOPORTADO EN MYSQL CON CONTAINS
+            whereClause.proyecto = { contains: proyecto };
+        }
+
+        // Obtener tareas de la base de datos usando Prisma con el filtro aplicado
+        const tasks = await prisma.task.findMany({
+            where: whereClause,
+            orderBy: {
+                createdAt: 'desc', // Opcional: ordenar por fecha de creación descendente
+            },
+        });
+
         res.status(200).json(tasks);
 
     } catch (error) {
-        console.error('Error al obtener las tareas:', error);
+        console.error('Error al obtener las tareas con filtros:', error);
         res.status(500).json({ error: 'No se pudieron obtener las tareas.', details: error.message });
     }
 });
+// --- FIN DE RUTA ACTUALIZADA ---
 
 // Ruta para actualizar una tarea por su ID
 app.put('/api/tasks/:id', async (req, res) => {
     try {
-        const { id } = req.params; // Obtener el ID de los parámetros de la URL
-        // Extraer los datos actualizados del cuerpo de la petición
+        const { id } = req.params;
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, fechaTerminada, prioridad, isCompleted } = req.body;
 
-        // Convertir fechas a Date si existen
         const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
-        const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : undefined;
+        // Solo parsear fechaTerminada si no es null
+        const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : null;
 
-        // Actualizar la tarea en la base de datos usando Prisma
+
         const updatedTask = await prisma.task.update({
             where: {
-                id: parseInt(id), // Convertir el ID de string a número entero
+                id: parseInt(id),
             },
             data: {
                 proyecto,
@@ -102,7 +128,6 @@ app.put('/api/tasks/:id', async (req, res) => {
             return res.status(404).json({ error: 'Tarea no encontrada.' });
         }
 
-        // Enviar la tarea actualizada como respuesta
         res.status(200).json(updatedTask);
 
     } catch (error) {
@@ -114,12 +139,11 @@ app.put('/api/tasks/:id', async (req, res) => {
 // Ruta para eliminar una tarea por su ID
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
-        const { id } = req.params; // Obtener el ID de los parámetros de la URL
+        const { id } = req.params;
 
-        // Eliminar la tarea de la base de datos usando Prisma
         const deletedTask = await prisma.task.delete({
             where: {
-                id: parseInt(id), // Convertir el ID de string a número entero
+                id: parseInt(id),
             },
         });
 
@@ -127,16 +151,13 @@ app.delete('/api/tasks/:id', async (req, res) => {
             return res.status(404).json({ error: 'Tarea no encontrada.' });
         }
 
-        // Enviar un mensaje de éxito (204 No Content es común para DELETE exitoso)
-        res.status(204).send(); // No se envía contenido en el cuerpo, solo el estado
+        res.status(204).send();
 
     } catch (error) {
         console.error('Error al eliminar la tarea:', error);
         res.status(500).json({ error: 'No se pudo eliminar la tarea.', details: error.message });
     }
 });
-
-// --- Fin de Rutas de la API ---
 
 
 // Iniciar el servidor
@@ -145,7 +166,7 @@ app.listen(PORT, () => {
     console.log('✅ Conectado a la base de datos MySQL con Prisma.');
 });
 
-// Manejo de cierre de Prisma (opcional, pero buena práctica para cerrar la conexión a la DB)
+// Manejo de cierre de Prisma (opcional, pero buena práctica)
 process.on('beforeExit', async () => {
     await prisma.$disconnect();
 });
