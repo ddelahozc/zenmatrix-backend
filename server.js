@@ -2,10 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs'); // Importa bcryptjs para hashear contraseñas
+const jwt = require('jsonwebtoken'); // Importa jsonwebtoken para JWTs
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
+// Secreto para firmar los JSON Web Tokens. ¡En producción, esto debería ser una variable de entorno fuerte!
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Usar variable de entorno o un secreto por defecto
 
 // Middlewares
 app.use(cors());
@@ -16,7 +20,87 @@ app.get('/', (req, res) => {
     res.send('¡La API de ZenMatrix está funcionando! 🎉');
 });
 
-// Ruta para crear una nueva tarea
+// --- NUEVAS RUTAS DE AUTENTICACIÓN ---
+
+// Ruta para el registro de nuevos usuarios
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email y contraseña son obligatorios.' });
+        }
+
+        // Verificar si el usuario ya existe
+        const existingUser = await prisma.user.findUnique({ where: { email } });
+        if (existingUser) {
+            return res.status(409).json({ error: 'El email ya está registrado.' });
+        }
+
+        // Hashear la contraseña antes de guardarla en la base de datos
+        // El '10' es el factor de sal (salt rounds), un valor común y seguro
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Crear el nuevo usuario en la base de datos
+        const newUser = await prisma.user.create({
+            data: {
+                email,
+                password: hashedPassword,
+            },
+        });
+
+        // No devolver la contraseña hasheada en la respuesta
+        const { password: userPassword, ...userWithoutPassword } = newUser;
+        res.status(201).json({ message: 'Usuario registrado exitosamente', user: userWithoutPassword });
+
+    } catch (error) {
+        console.error('Error en el registro de usuario:', error);
+        res.status(500).json({ error: 'No se pudo registrar el usuario.', details: error.message });
+    }
+});
+
+// Ruta para el inicio de sesión de usuarios
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email y contraseña son obligatorios.' });
+        }
+
+        // Buscar al usuario por email
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) {
+            return res.status(401).json({ error: 'Credenciales inválidas.' });
+        }
+
+        // Comparar la contraseña proporcionada con la contraseña hasheada en la base de datos
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ error: 'Credenciales inválidas.' });
+        }
+
+        // Generar un JSON Web Token (JWT)
+        // El token contiene el ID del usuario y expira en 1 hora
+        const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+
+        // No devolver la contraseña hasheada en la respuesta
+        const { password: userPassword, ...userWithoutPassword } = user;
+        res.status(200).json({ message: 'Inicio de sesión exitoso', token, user: userWithoutPassword });
+
+    } catch (error) {
+        console.error('Error en el inicio de sesión:', error);
+        res.status(500).json({ error: 'No se pudo iniciar sesión.', details: error.message });
+    }
+});
+
+// --- FIN DE NUEVAS RUTAS DE AUTENTICACIÓN ---
+
+
+// Middleware para proteger rutas (se usará más adelante)
+// const authenticateToken = (req, res, next) => { ... };
+
+// Ruta para crear una nueva tarea (AÚN NO PROTEGIDA)
 app.post('/api/tasks', async (req, res) => {
     try {
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, prioridad } = req.body;
@@ -35,6 +119,7 @@ app.post('/api/tasks', async (req, res) => {
                 descripcion,
                 fechaVencimiento: parsedFechaVencimiento,
                 prioridad,
+                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida
             },
         });
 
@@ -46,16 +131,16 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// --- RUTA ACTUALIZADA PARA OBTENER TAREAS CON FILTROS, BÚSQUEDA, ORDENAMIENTO Y PAGINACIÓN ---
+// Ruta para obtener tareas con filtros, búsqueda, ordenamiento y paginación (AÚN NO PROTEGIDA)
 app.get('/api/tasks', async (req, res) => {
     try {
-        // Obtener parámetros de consulta de la URL (filtros, ordenamiento y paginación)
         const { search, priority, isCompleted, proyecto, sortBy, sortDirection, page, limit } = req.query;
 
-        // Construir el objeto 'where' para Prisma dinámicamente (filtros)
         const whereClause = {};
+        // if (req.user && req.user.userId) { // Esto se habilitará cuando la ruta esté protegida
+        //     whereClause.userId = req.user.userId;
+        // }
 
-        // Filtro por término de búsqueda (título o descripción)
         if (search) {
             whereClause.OR = [
                 { titulo: { contains: search } },
@@ -63,41 +148,33 @@ app.get('/api/tasks', async (req, res) => {
             ];
         }
 
-        // Filtro por prioridad
         if (priority) {
             whereClause.prioridad = priority;
         }
 
-        // Filtro por estado de completado
         if (isCompleted !== undefined && isCompleted !== null && isCompleted !== '') {
-            whereClause.isCompleted = isCompleted === 'true'; // Convertir string 'true'/'false' a booleano
+            whereClause.isCompleted = isCompleted === 'true';
         }
 
-        // Filtro por proyecto
         if (proyecto) {
             whereClause.proyecto = { contains: proyecto };
         }
 
-        // Construir el objeto 'orderBy' para Prisma dinámicamente (ordenamiento)
         let orderByClause = {};
         if (sortBy && sortDirection) {
             orderByClause = {
-                [sortBy]: sortDirection, // Ej: { createdAt: 'desc' }
+                [sortBy]: sortDirection,
             };
         } else {
-            // Ordenamiento por defecto si no se especifica
             orderByClause = { createdAt: 'desc' };
         }
 
-        // --- Lógica de Paginación ---
-        const pageNum = parseInt(page) || 1; // Página actual, por defecto 1
-        const limitNum = parseInt(limit) || 10; // Límite de tareas por página, por defecto 10
-        const skip = (pageNum - 1) * limitNum; // Calcular cuántas tareas saltar
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const skip = (pageNum - 1) * limitNum;
 
-        // Obtener el conteo total de tareas que coinciden con los filtros (sin paginación)
         const totalCount = await prisma.task.count({ where: whereClause });
 
-        // Obtener tareas paginadas de la base de datos usando Prisma
         const tasks = await prisma.task.findMany({
             where: whereClause,
             orderBy: orderByClause,
@@ -105,7 +182,6 @@ app.get('/api/tasks', async (req, res) => {
             take: limitNum,
         });
 
-        // Devolver las tareas paginadas y el conteo total
         res.status(200).json({
             tasks,
             totalCount,
@@ -119,9 +195,8 @@ app.get('/api/tasks', async (req, res) => {
         res.status(500).json({ error: 'No se pudieron obtener las tareas.', details: error.message });
     }
 });
-// --- FIN DE RUTA ACTUALIZADA ---
 
-// Ruta para actualizar una tarea por su ID
+// Rutas PUT y DELETE de tareas (AÚN NO PROTEGIDAS)
 app.put('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -130,9 +205,11 @@ app.put('/api/tasks/:id', async (req, res) => {
         const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
         const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : null;
 
+        // También necesitará validación de userId aquí una vez que esté protegida
         const updatedTask = await prisma.task.update({
             where: {
                 id: parseInt(id),
+                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida y queramos que el usuario solo edite sus tareas
             },
             data: {
                 proyecto,
@@ -158,14 +235,15 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
-// Ruta para eliminar una tarea por su ID
 app.delete('/api/tasks/:id', async (req, res) => {
     try {
         const { id } = req.params;
 
+        // También necesitará validación de userId aquí una vez que esté protegida
         const deletedTask = await prisma.task.delete({
             where: {
                 id: parseInt(id),
+                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida y queramos que el usuario solo borre sus tareas
             },
         });
 
