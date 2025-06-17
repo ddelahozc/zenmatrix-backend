@@ -2,14 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs'); // Importa bcryptjs para hashear contraseñas
-const jwt = require('jsonwebtoken'); // Importa jsonwebtoken para JWTs
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
-// Secreto para firmar los JSON Web Tokens. ¡En producción, esto debería ser una variable de entorno fuerte!
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Usar variable de entorno o un secreto por defecto
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Usar variable de entorno fuerte
 
 // Middlewares
 app.use(cors());
@@ -20,9 +19,7 @@ app.get('/', (req, res) => {
     res.send('¡La API de ZenMatrix está funcionando! 🎉');
 });
 
-// --- NUEVAS RUTAS DE AUTENTICACIÓN ---
-
-// Ruta para el registro de nuevos usuarios
+// Rutas de Autenticación (Registro y Login)
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -31,17 +28,13 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'Email y contraseña son obligatorios.' });
         }
 
-        // Verificar si el usuario ya existe
         const existingUser = await prisma.user.findUnique({ where: { email } });
         if (existingUser) {
             return res.status(409).json({ error: 'El email ya está registrado.' });
         }
 
-        // Hashear la contraseña antes de guardarla en la base de datos
-        // El '10' es el factor de sal (salt rounds), un valor común y seguro
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Crear el nuevo usuario en la base de datos
         const newUser = await prisma.user.create({
             data: {
                 email,
@@ -49,7 +42,6 @@ app.post('/api/register', async (req, res) => {
             },
         });
 
-        // No devolver la contraseña hasheada en la respuesta
         const { password: userPassword, ...userWithoutPassword } = newUser;
         res.status(201).json({ message: 'Usuario registrado exitosamente', user: userWithoutPassword });
 
@@ -59,7 +51,6 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// Ruta para el inicio de sesión de usuarios
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -68,23 +59,18 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: 'Email y contraseña son obligatorios.' });
         }
 
-        // Buscar al usuario por email
         const user = await prisma.user.findUnique({ where: { email } });
         if (!user) {
             return res.status(401).json({ error: 'Credenciales inválidas.' });
         }
 
-        // Comparar la contraseña proporcionada con la contraseña hasheada en la base de datos
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             return res.status(401).json({ error: 'Credenciales inválidas.' });
         }
 
-        // Generar un JSON Web Token (JWT)
-        // El token contiene el ID del usuario y expira en 1 hora
         const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
 
-        // No devolver la contraseña hasheada en la respuesta
         const { password: userPassword, ...userWithoutPassword } = user;
         res.status(200).json({ message: 'Inicio de sesión exitoso', token, user: userWithoutPassword });
 
@@ -94,15 +80,36 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- FIN DE NUEVAS RUTAS DE AUTENTICACIÓN ---
+// --- Middleware para proteger rutas (Autenticación por Token) ---
+const authenticateToken = (req, res, next) => {
+    // Obtener el token del encabezado de autorización
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Formato: Bearer TOKEN
 
+    if (token == null) {
+        return res.status(401).json({ error: 'Token no proporcionado.' }); // No hay token
+    }
 
-// Middleware para proteger rutas (se usará más adelante)
-// const authenticateToken = (req, res, next) => { ... };
+    // Verificar el token
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            console.error('Error al verificar token:', err);
+            // Si el token es inválido o expirado
+            return res.status(403).json({ error: 'Token inválido o expirado.' });
+        }
+        // Si el token es válido, adjuntar la información del usuario (del token) a la petición
+        req.user = user; // { userId: ... }
+        next(); // Continuar con la siguiente función middleware o controlador de ruta
+    });
+};
 
-// Ruta para crear una nueva tarea (AÚN NO PROTEGIDA)
-app.post('/api/tasks', async (req, res) => {
+// --- Rutas de Tareas (AHORA PROTEGIDAS) ---
+
+// Ruta para crear una nueva tarea (PROTEGIDA)
+app.post('/api/tasks', authenticateToken, async (req, res) => {
     try {
+        // userId ahora viene del token, no del body de la petición
+        const { userId } = req.user;
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, prioridad } = req.body;
 
         if (!titulo || !proyecto || !responsable || !prioridad) {
@@ -119,7 +126,7 @@ app.post('/api/tasks', async (req, res) => {
                 descripcion,
                 fechaVencimiento: parsedFechaVencimiento,
                 prioridad,
-                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida
+                userId: userId, // Asignar el ID del usuario autenticado
             },
         });
 
@@ -131,15 +138,15 @@ app.post('/api/tasks', async (req, res) => {
     }
 });
 
-// Ruta para obtener tareas con filtros, búsqueda, ordenamiento y paginación (AÚN NO PROTEGIDA)
-app.get('/api/tasks', async (req, res) => {
+// Ruta para obtener tareas con filtros, búsqueda, ordenamiento y paginación (PROTEGIDA)
+app.get('/api/tasks', authenticateToken, async (req, res) => {
     try {
+        const { userId } = req.user; // Obtener el ID del usuario autenticado
         const { search, priority, isCompleted, proyecto, sortBy, sortDirection, page, limit } = req.query;
 
-        const whereClause = {};
-        // if (req.user && req.user.userId) { // Esto se habilitará cuando la ruta esté protegida
-        //     whereClause.userId = req.user.userId;
-        // }
+        const whereClause = {
+            userId: userId, // Solo obtener tareas que pertenecen al usuario autenticado
+        };
 
         if (search) {
             whereClause.OR = [
@@ -196,20 +203,20 @@ app.get('/api/tasks', async (req, res) => {
     }
 });
 
-// Rutas PUT y DELETE de tareas (AÚN NO PROTEGIDAS)
-app.put('/api/tasks/:id', async (req, res) => {
+// Ruta para actualizar una tarea por su ID (PROTEGIDA)
+app.put('/api/tasks/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
+        const { userId } = req.user; // Obtener el ID del usuario autenticado
         const { proyecto, responsable, titulo, descripcion, fechaVencimiento, fechaTerminada, prioridad, isCompleted } = req.body;
 
         const parsedFechaVencimiento = fechaVencimiento ? new Date(fechaVencimiento) : undefined;
         const parsedFechaTerminada = fechaTerminada ? new Date(fechaTerminada) : null;
 
-        // También necesitará validación de userId aquí una vez que esté protegida
         const updatedTask = await prisma.task.update({
             where: {
                 id: parseInt(id),
-                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida y queramos que el usuario solo edite sus tareas
+                userId: userId, // Asegurar que la tarea pertenezca al usuario autenticado
             },
             data: {
                 proyecto,
@@ -224,7 +231,8 @@ app.put('/api/tasks/:id', async (req, res) => {
         });
 
         if (!updatedTask) {
-            return res.status(404).json({ error: 'Tarea no encontrada.' });
+            // Este caso puede ocurrir si la tarea no existe O si no pertenece al userId
+            return res.status(404).json({ error: 'Tarea no encontrada o no tienes permiso para actualizarla.' });
         }
 
         res.status(200).json(updatedTask);
@@ -235,30 +243,31 @@ app.put('/api/tasks/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/tasks/:id', async (req, res) => {
+// Ruta para eliminar una tarea por su ID (PROTEGIDA)
+app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
     try {
         const { id } = req.params;
+        const { userId } = req.user; // Obtener el ID del usuario autenticado
 
-        // También necesitará validación de userId aquí una vez que esté protegida
         const deletedTask = await prisma.task.delete({
             where: {
                 id: parseInt(id),
-                // userId: req.user.userId, // Esto se habilitará cuando la ruta esté protegida y queramos que el usuario solo borre sus tareas
+                userId: userId, // Asegurar que la tarea pertenezca al usuario autenticado
             },
         });
 
         if (!deletedTask) {
-            return res.status(404).json({ error: 'Tarea no encontrada.' });
+            // Este caso puede ocurrir si la tarea no existe O si no pertenece al userId
+            return res.status(404).json({ error: 'Tarea no encontrada o no tienes permiso para eliminarla.' });
         }
 
-        res.status(204).send();
+        res.status(204).send(); // 204 No Content para eliminación exitosa
 
     } catch (error) {
         console.error('Error al eliminar la tarea:', error);
         res.status(500).json({ error: 'No se pudo eliminar la tarea.', details: error.message });
     }
 });
-
 
 // Iniciar el servidor
 app.listen(PORT, () => {

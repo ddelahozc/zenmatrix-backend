@@ -1,20 +1,13 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-// output   = "../generated/prisma"  --- Esta linea se encontraba en generator client
-
+//  output   = "../generated/prisma"
 
 generator client {
-   provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
-
 
 model Task {
   id             Int       @id @default(autoincrement())
@@ -29,16 +22,16 @@ model Task {
   isCompleted    Boolean   @default(false)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-  // Enlazar tarea a un usuario, y la relación ahora es REQUERIDA
-  userId         Int       // <<-- ¡Aquí es Int, NO Int?!
-  user           User      @relation("UserTasks", fields: [userId], references: [id]) // <<-- ¡Aquí es User, NO User?!
+  userId         Int
+  user           User      @relation("UserTasks", fields: [userId], references: [id])
 }
 
-// Modelo de Usuario
+// Modelo de Usuario (ACTUALIZADO)
 model User {
   id        Int      @id @default(autoincrement())
   email     String   @unique
   password  String
+  role      String   @default("USER") // <<-- ¡NUEVO CAMPO: rol del usuario!
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tasks     Task[]   @relation("UserTasks")
